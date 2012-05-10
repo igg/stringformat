@@ -261,18 +261,99 @@ class FormattableString(object):
                                                       want_bytes)
         return self._string % params
 
+# the code below is used to monkey patch str, including str literals.
+# originally from https://gist.github.com/295200
+# found this from Armin R. on Twitter, what a beautiful gem ;)
 
+import sys
+import ctypes
+from types import DictProxyType, MethodType
+
+# figure out side of _Py_ssize_t
+if hasattr(ctypes.pythonapi, 'Py_InitModule4_64'):
+    _Py_ssize_t = ctypes.c_int64
+else:
+    _Py_ssize_t = ctypes.c_int
+
+# regular python
+class _PyObject(ctypes.Structure):
+	pass
+_PyObject._fields_ = [
+	('ob_refcnt', _Py_ssize_t),
+	('ob_type', ctypes.POINTER(_PyObject))
+]
+
+# python with trace
+if object.__basicsize__ != ctypes.sizeof(_PyObject):
+	class _PyObject(ctypes.Structure):
+		pass
+	_PyObject._fields_ = [
+		('_ob_next', ctypes.POINTER(_PyObject)),
+		('_ob_prev', ctypes.POINTER(_PyObject)),
+		('ob_refcnt', _Py_ssize_t),
+		('ob_type', ctypes.POINTER(_PyObject))
+	]
+
+
+class _DictProxy(_PyObject):
+	_fields_ = [('dict', ctypes.POINTER(_PyObject))]
+
+
+def reveal_dict(proxy):
+	if not isinstance(proxy, DictProxyType):
+		raise TypeError('dictproxy expected')
+	dp = _DictProxy.from_address(id(proxy))
+	ns = {}
+	ctypes.pythonapi.PyDict_SetItem(ctypes.py_object(ns),
+									ctypes.py_object(None),
+									dp.dict)
+	return ns[None]
+
+
+def get_class_dict(cls):
+	d = getattr(cls, '__dict__', None)
+	if d is None:
+		raise TypeError('given class does not have a dictionary')
+	if isinstance(d, DictProxyType):
+		return reveal_dict(d)
+	return d
+
+# This does the actual monkey patch on str and unicode in python >= 2.4 and < 2.7
+if (2, 4, 0) <= sys.version_info < (2, 7):
+	d = get_class_dict(str)
+	d['format'] = lambda x,*args,**kargs: FormattableString(x).format(*args,**kargs)
+	d = get_class_dict(unicode)
+	d['format'] = lambda x,*args,**kargs: FormattableString(x).format(*args,**kargs)
+
+
+# Tested on python 2.5.6, 2.6.7, 2.7.1
 def selftest():
-    import datetime
-    F = FormattableString
+	import datetime
+	F = FormattableString
 
-    assert F(u"{0:{width}.{precision}s}").format('hello world',
-             width=8, precision=5) == u'hello   '
+	assert F(u"{0:{width}.{precision}s}").format('hello world',
+		width=8, precision=5) == u'hello   '
 
-    d = datetime.date(2010, 9, 7)
-    assert F(u"The year is {0.year}").format(d) == u"The year is 2010"
-    assert F(u"Tested on {0:%Y-%m-%d}").format(d) == u"Tested on 2010-09-07"
-    print 'Test successful'
+	d = datetime.date(2010, 9, 7)
+	assert F(u"The year is {0.year}").format(d) == u"The year is 2010"
+	assert F(u"Tested on {0:%Y-%m-%d}").format(d) == u"Tested on 2010-09-07"
+	print 'Class Test successful'
+
+	assert u"{0:{width}.{precision}s}".format('hello world',
+		width=8, precision=5) == u'hello   '
+
+	d = datetime.date(2010, 9, 7)
+	assert u"The year is {0.year}".format(d) == u"The year is 2010"
+	assert u"Tested on {0:%Y-%m-%d}".format(d) == u"Tested on 2010-09-07"
+	print 'unicode literals test successful'
+
+	assert "{0:{width}.{precision}s}".format('hello world',
+		width=8, precision=5) == 'hello   '
+
+	d = datetime.date(2010, 9, 7)
+	assert "The year is {0.year}".format(d) == "The year is 2010"
+	assert "Tested on {0:%Y-%m-%d}".format(d) == "Tested on 2010-09-07"
+	print 'str literals test successful'
 
 if __name__ == '__main__':
     selftest()

@@ -20,7 +20,7 @@ from setuptools import setup
 
 setup(
     name='StringFormat',
-    version='0.3',
+    version='0.4',
     license='BSD',
     url='http://github.com/florentx/stringformat',
     author='Florent Xicluna',
